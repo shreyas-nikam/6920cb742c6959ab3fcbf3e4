@@ -1,4 +1,5 @@
-"""import streamlit as st
+"""
+import streamlit as st
 st.set_page_config(page_title="QuLab", layout="wide")
 st.sidebar.image("https://www.quantuniversity.com/assets/img/logo5.jpg")
 st.sidebar.divider()
