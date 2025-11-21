@@ -1,189 +1,130 @@
-"""
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-# Helper function to generate dummy data and train a dummy model
-@st.cache_data
-def get_dummy_model_and_data():
-    np.random.seed(42)
-    num_samples = 1000
-    data = {
-        'income': np.random.normal(50000, 15000, num_samples),
-        'debt_to_income': np.random.normal(0.3, 0.1, num_samples),
-        'utilization': np.random.normal(0.4, 0.2, num_samples),
-        'credit_score': np.random.randint(300, 850, num_samples),
-        'unemployment_proxy': np.random.normal(0.05, 0.02, num_samples),
-        'house_price': np.random.normal(300000, 100000, num_samples),
-        'credit_spread': np.random.normal(0.015, 0.005, num_samples) # as a decimal, e.g., 150 bps
-    }
-    df = pd.DataFrame(data)
-
-    # Ensure some realistic bounds
-    df['debt_to_income'] = np.clip(df['debt_to_income'], 0.05, 0.6)
-    df['utilization'] = np.clip(df['utilization'], 0.05, 0.9)
-    df['unemployment_proxy'] = np.clip(df['unemployment_proxy'], 0.01, 0.15)
-    df['credit_spread'] = np.clip(df['credit_spread'], 0.005, 0.035)
-    df['income'] = np.clip(df['income'], 20000, 150000)
-
-    # Generate a target variable (e.g., probability of default - PD)
-    # Simulating that lower income, higher DTI, higher utilization, lower credit score, higher unemployment, lower house price, higher credit spread lead to higher PD
-    df['log_odds'] = (
-        -0.00002 * df['income']
-        + 5 * df['debt_to_income']
-        + 3 * df['utilization']
-        - 0.005 * df['credit_score']
-        + 50 * df['unemployment_proxy']
-        - 0.000002 * df['house_price']
-        + 100 * df['credit_spread']
-        + np.random.normal(0, 0.5, num_samples)
-    )
-    df['default'] = (1 / (1 + np.exp(-df['log_odds'])) > 0.5).astype(int)
-
-    X = df[['income', 'debt_to_income', 'utilization', 'credit_score', 'unemployment_proxy', 'house_price', 'credit_spread']]
-    y = df['default']
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    model = LogisticRegression(solver='liblinear', random_state=42)
-    model.fit(X_train_scaled, y_train)
-
-    return model, scaler, X_test.copy()
-
-
-def apply_stress_transformation(X_df, scenario_shocks):
-    X_stressed = X_df.copy()
-
-    # Apply multiplicative shocks
-    if "income_multiplier" in scenario_shocks: 
-        X_stressed['income'] = X_stressed['income'] * scenario_shocks['income_multiplier']
-    if "unemployment_proxy_multiplier" in scenario_shocks:    
-        X_stressed['unemployment_proxy'] = X_stressed['unemployment_proxy'] * scenario_shocks['unemployment_proxy_multiplier']
-    if "utilization_multiplier" in scenario_shocks:    
-        X_stressed['utilization'] = X_stressed['utilization'] * scenario_shocks['utilization_multiplier']
-    if "debt_to_income_multiplier" in scenario_shocks:    
-        X_stressed['debt_to_income'] = X_stressed['debt_to_income'] * scenario_shocks['debt_to_income_multiplier']
-    if "house_price_multiplier" in scenario_shocks:    
-        X_stressed['house_price'] = X_stressed['house_price'] * scenario_shocks['house_price_multiplier']
-    
-    # Apply additive shock for credit spread (bps to decimal)
-    if "credit_spread_additive_bps" in scenario_shocks:    
-        X_stressed['credit_spread'] = X_stressed['credit_spread'] + (scenario_shocks['credit_spread_additive_bps'] / 10000)
-
-    # Ensure values remain within realistic bounds after shocking
-    X_stressed['debt_to_income'] = np.clip(X_stressed['debt_to_income'], 0.05, 0.6)
-    X_stressed['utilization'] = np.clip(X_stressed['utilization'], 0.05, 0.9)
-    X_stressed['unemployment_proxy'] = np.clip(X_stressed['unemployment_proxy'], 0.01, 0.15)
-    X_stressed['credit_spread'] = np.clip(X_stressed['credit_spread'], 0.005, 0.035)
-    X_stressed['income'] = np.clip(X_stressed['income'], 20000, 150000)
-
-    return X_stressed
-
 def run_page2():
-    st.header("2. Model Response Measurement & Portfolio-Level Aggregation")
+    st.header("2. Scenario Definition Panel & Model Response Measurement")
 
     st.markdown("""
-    Here we will measure how a trained model ($f_\theta$) responds to the defined stress scenarios. We will compare baseline predictions with stressed predictions and aggregate the impact at a portfolio level.
+    This section allows users to define and parameterize various financial scenarios by applying multipliers and shifts to selected input features. We will then observe how a hypothetical financial model responds to these defined stresses.
 
-    ### Model Response
-    *   **Baseline prediction:** $\hat{y} = f_\theta(x)$
-    *   **Stressed prediction:** $\hat{y}^{(s)} = f_\theta(x^{(s)})$
+    ### Scenario Definition Panel
 
-    We then compute impact metrics, such as:
-    $$
-    \Delta \hat{y}^{(s)} = \hat{y}^{(s)} - \hat{y}
-    $$
-    For credit models, this could represent the change in Probability of Default (PD).
-
-    ### Portfolio-Level Aggregation
-    The effects are rolled up to portfolio metrics, such as:
-    *   Change in mean PD or loss for a credit portfolio.
-    *   Counts or percentages of obligors whose risk grade upgrades/downgrades under scenario (s).
+    Define your scenario by adjusting the scaling factors for key financial features. These scales will be translated into the $\delta_s$ vector for our stress transformation $T_s(x)$. A value of 1.0 means no change, while values less than 1.0 represent a decrease and values greater than 1.0 represent an increase.
     """)
 
-    model, scaler, X_baseline = get_dummy_model_and_data()
+    # --- Dummy Model and Data Generation ---
+    st.subheader("Setup: Hypothetical Model and Data")
+    st.markdown("""
+    To demonstrate, we will use a synthetic dataset and a simple Logistic Regression model.
+    Imagine we have a model predicting Probability of Default (PD) based on `income`, `debt_to_income_ratio`, and `utilization_rate`.
+    """)
 
-    if "scenario_shocks" not in st.session_state:
-        st.warning("Please define scenario parameters on the 'Scenario Definition' page first.")
-        return
+    np.random.seed(42)
+    n_samples = 1000
+    income = np.random.normal(50000, 15000, n_samples)
+    debt_to_income_ratio = np.random.beta(2, 5, n_samples) * 0.5 + 0.1 # Range 0.1 to 0.6
+    utilization_rate = np.random.beta(3, 3, n_samples) * 0.8 # Range 0 to 0.8
 
-    scenario_shocks = st.session_state["scenario_shocks"]
+    # Simulate a target variable (e.g., default) based on features
+    # Higher DTI and utilization, lower income -> higher probability of default
+    prob_default = 1 / (1 + np.exp(-(
+        -0.00002 * income +
+        5 * debt_to_income_ratio +
+        3 * utilization_rate -
+        2.5 + np.random.normal(0, 0.5, n_samples)
+    )))
+    default = (prob_default > np.random.rand(n_samples)).astype(int)
 
-    st.subheader("Baseline vs. Stressed Predictions")
+    data = pd.DataFrame({
+        'income': income,
+        'debt_to_income_ratio': debt_to_income_ratio,
+        'utilization_rate': utilization_rate,
+        'default': default
+    })
 
-    # Baseline Predictions
-    X_baseline_scaled = scaler.transform(X_baseline)
-    baseline_predictions = model.predict_proba(X_baseline_scaled)[:, 1] # Probability of default
+    X = data[['income', 'debt_to_income_ratio', 'utilization_rate']]
+    y = data['default']
 
-    # Stressed Features
-    X_stressed = apply_stress_transformation(X_baseline, scenario_shocks)
+    # Scale features for the model
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Train a simple Logistic Regression model
+    model = LogisticRegression(solver='liblinear', random_state=42)
+    model.fit(X_scaled, y)
+
+    st.write("Model trained on synthetic data.")
+
+    # --- Scenario Definition ---
+    st.subheader("Define Your Scenario Shocks")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        income_scale = st.slider("Income Scale Factor", 0.5, 1.5, 1.0, 0.05)
+    with col2:
+        debt_to_income_scale = st.slider("Debt-to-Income Ratio Scale Factor", 0.5, 1.5, 1.0, 0.05)
+    with col3:
+        utilization_scale = st.slider("Utilization Rate Scale Factor", 0.5, 1.5, 1.0, 0.05)
+
+    # Calculate delta_s based on scales
+    delta_s = np.array([income_scale - 1, debt_to_income_scale - 1, utilization_scale - 1])
+    st.markdown(f"Current scenario shocks ($\delta_s$): `{delta_s[0]:.2f}, {delta_s[1]:.2f}, {delta_s[2]:.2f}`")
+
+    # --- Model Response Measurement ---
+    st.subheader("Model Response Measurement")
+    st.markdown("""
+    For a trained model $f_\theta$, we compute both a baseline prediction and a stressed prediction:
+
+    *   **Baseline prediction:**
+        $$ \hat{y} = f_\theta(x) $$
+        This is the model's prediction under normal, unstressed conditions.
+
+    *   **Stressed prediction:**
+        $$ \hat{y}^{(s)} = f_\theta(x^{(s)}) $$
+        This is the model's prediction when the input features $x$ are transformed by the scenario $T_s(x)$ to $x^{(s)}$.
+
+    We then compute impact metrics, such as the change in prediction:
+    $$ \Delta \hat{y}^{(s)} = \hat{y}^{(s)} - \hat{y} $$
+    Or, for aggregated measures like Expected Loss (EL):
+    $$ \Delta \text{EL}^{(s)} = \text{EL}^{(s)} - \text{EL} $$
+    """)
+
+    # Perform predictions
+    baseline_predictions = model.predict_proba(X_scaled)[:, 1]
+
+    # Apply stress transformation to original X, then scale
+    X_stressed_values = X.values * (1 + delta_s)
+    X_stressed = pd.DataFrame(X_stressed_values, columns=X.columns)
+    
+    # Ensure no negative values for features that should be non-negative
+    X_stressed['income'] = X_stressed['income'].clip(lower=0)
+    X_stressed['debt_to_income_ratio'] = X_stressed['debt_to_income_ratio'].clip(lower=0, upper=1)
+    X_stressed['utilization_rate'] = X_stressed['utilization_rate'].clip(lower=0, upper=1)
+
+    # Scale the stressed features using the *trained* scaler
     X_stressed_scaled = scaler.transform(X_stressed)
+
     stressed_predictions = model.predict_proba(X_stressed_scaled)[:, 1]
 
-    df_results = X_baseline.copy()
-    df_results["Baseline_PD"] = baseline_predictions
-    df_results["Stressed_PD"] = stressed_predictions
-    df_results["Delta_PD"] = df_results["Stressed_PD"] - df_results["Baseline_PD"]
+    delta_predictions = stressed_predictions - baseline_predictions
 
-    st.dataframe(df_results.head(), caption="First 5 individual predictions (Baseline vs. Stressed PD)")
+    st.write(f"Mean Baseline PD: `{np.mean(baseline_predictions):.4f}`")
+    st.write(f"Mean Stressed PD: `{np.mean(stressed_predictions):.4f}`")
+    st.write(f"Mean Change in PD ($\Delta \hat{y}^{(s)}$): `{np.mean(delta_predictions):.4f}`")
 
-    st.subheader("Portfolio-Level Aggregation")
-
-    mean_baseline_pd = df_results["Baseline_PD"].mean()
-    mean_stressed_pd = df_results["Stressed_PD"].mean()
-    delta_mean_pd = mean_stressed_pd - mean_baseline_pd
-
-    st.metric(label="Mean Baseline PD", value=f"{mean_baseline_pd:.4f}")
-    st.metric(label="Mean Stressed PD", value=f"{mean_stressed_pd:.4f}")
-    st.metric(label="Change in Mean PD ($\Delta \hat{y}^{(s)}$)", value=f"{delta_mean_pd:.4f}",
-              delta=f"{delta_mean_pd:.4f}")
-
-    st.markdown("""
-    ### Distribution of Change in PD ($\Delta PD$)
-    This histogram visualizes the distribution of changes in Probability of Default for individual accounts under the defined stress scenario. A shift towards higher positive $\Delta PD$ indicates a widespread increase in risk.
-    """)
-
-    fig = go.Figure(data=[go.Histogram(x=df_results['Delta_PD'], nbinsx=50)])
-    fig.update_layout(title_text='Distribution of $\Delta PD$ Across Portfolio',
-                      xaxis_title_text='Change in PD (Stressed - Baseline)',
-                      yaxis_title_text='Number of Accounts')
+    # Plotting the distribution of Delta_y
+    st.subheader("Distribution of Change in PD")
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=delta_predictions, nbinsx=50, name='$\Delta \hat{y}^{(s)}$ (Change in PD)'))
+    fig.update_layout(title='Distribution of Individual Changes in Probability of Default (PD)',
+                      xaxis_title='Change in PD (Stressed PD - Baseline PD)',
+                      yaxis_title='Number of Instances',
+                      hovermode='x unified')
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("""
-    ### Risk Grade Migration
-    We can also look at how many accounts would 'migrate' to a higher risk category (e.g., higher PD band) under stress.
+    This histogram shows the distribution of how each individual's predicted Probability of Default (PD) changes under the defined stress scenario. A shift to the right indicates a general increase in PD under stress.
     """)
-
-    # Define simple risk bands for demonstration
-    def get_risk_band(pd_value):
-        if pd_value < 0.1:
-            return "Low Risk"
-        elif pd_value < 0.3:
-            return "Medium Risk"
-        else:
-            return "High Risk"
-
-    df_results['Baseline_Risk_Band'] = df_results['Baseline_PD'].apply(get_risk_band)
-    df_results['Stressed_Risk_Band'] = df_results['Stressed_PD'].apply(get_risk_band)
-
-    risk_migration = pd.crosstab(df_results['Baseline_Risk_Band'], df_results['Stressed_Risk_Band'],
-                                 normalize='index').round(2)
-
-    st.dataframe(risk_migration, caption="Risk Grade Migration Matrix (Row: Baseline, Column: Stressed)")
-    st.info("Numbers represent the proportion of accounts from a baseline risk band that fall into a stressed risk band.")
-
-    st.session_state["df_results_page2"] = df_results
-    st.session_state["model_page2"] = model
-    st.session_state["scaler_page2"] = scaler
-    st.session_state["X_baseline_page2"] = X_baseline
-
-
-"""
