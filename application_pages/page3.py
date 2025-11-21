@@ -1,167 +1,150 @@
-"""
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-
-# Assuming these helper functions are available or re-defined from page2
-# For deployment, consider putting common functions in a utility file
-from application_pages.page2 import get_dummy_model_and_data, apply_stress_transformation
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 def run_page3():
-    st.header("3. Sensitivity & Nonlinearity Analysis / Validation-Ready Outputs")
+    st.header("3. Portfolio Aggregation & Sensitivity Analysis")
 
+    # --- Dummy Model and Data Generation (re-used for consistency) ---
+    np.random.seed(42)
+    n_samples = 1000
+    income = np.random.normal(50000, 15000, n_samples)
+    debt_to_income_ratio = np.random.beta(2, 5, n_samples) * 0.5 + 0.1
+    utilization_rate = np.random.beta(3, 3, n_samples) * 0.8
+
+    prob_default = 1 / (1 + np.exp(-(
+        -0.00002 * income +
+        5 * debt_to_income_ratio +
+        3 * utilization_rate -
+        2.5 + np.random.normal(0, 0.5, n_samples)
+    )))
+    default = (prob_default > np.random.rand(n_samples)).astype(int)
+
+    data = pd.DataFrame({
+        'income': income,
+        'debt_to_income_ratio': debt_to_income_ratio,
+        'utilization_rate': utilization_rate,
+        'default': default
+    })
+
+    X = data[['income', 'debt_to_income_ratio', 'utilization_rate']]
+    y = data['default']
+
+    # For a more stable LR with scaling
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    model = LogisticRegression(solver='liblinear', random_state=42)
+    model.fit(X_scaled, y)
+
+    # Baseline predictions
+    baseline_predictions = model.predict_proba(X_scaled)[:, 1]
+
+    st.subheader("Portfolio-Level Aggregation")
     st.markdown("""
-    This section allows for exploring gradual stress paths by varying shock intensity and generating validation-ready outputs.
+    Scenario effects can be rolled up from individual predictions to meaningful portfolio-level metrics. This provides a holistic view of the model's robustness across the entire portfolio.
 
-    ### Sensitivity and Nonlinearity Analysis
-    We can vary the shock intensity ($\alpha$) over a range to observe the trajectory of model outputs. The stressed feature vector becomes:
-    $$
-x^{(s,\alpha)} = x \odot (1 + \alpha \delta_s), \quad \alpha \in [0,1]
-    $$
-    Plotting $\hat{y}^{(s,\alpha)}$ reveals nonlinear thresholds and regions where the model response accelerates or becomes unstable.
+    Examples of portfolio-level metrics:
+    *   Change in mean Probability of Default (PD) or Expected Loss (EL) for a credit portfolio.
+    *   Shift in factor exposures or Value-at-Risk (VaR) for an equity portfolio.
+    *   Counts or percentages of obligors whose risk grade upgrades/downgrades under a specific scenario $s$.
 
-    ### Validation-Ready Outputs
-    Generate tables and plots suitable for validation reports and committees:
-    *   Scenario vs. baseline metrics
-    *   Heatmaps by segment (e.g., rating band, sector, region)
-    *   Distributions of ($\Delta \hat{y}^{(s)}$) and flags where changes exceed thresholds
+    Let's define a simple scenario and observe its portfolio impact.
     """)
 
-    if "scenario_shocks" not in st.session_state or \
-       "model_page2" not in st.session_state or \
-       "scaler_page2" not in st.session_state or \
-       "X_baseline_page2" not in st.session_state:
-        st.warning("Please define scenario parameters on 'Scenario Definition' and run 'Model Response & Aggregation' first.")
-        return
+    st.markdown("**Define Stress Scenario for Aggregation:**")
+    agg_income_scale = st.slider("Income Scale Factor (for Aggregation)", 0.5, 1.5, 0.9, 0.05)
+    agg_dti_scale = st.slider("Debt-to-Income Ratio Scale Factor (for Aggregation)", 0.5, 1.5, 1.2, 0.05)
+    agg_util_scale = st.slider("Utilization Rate Scale Factor (for Aggregation)", 0.5, 1.5, 1.1, 0.05)
 
-    scenario_shocks = st.session_state["scenario_shocks"]
-    model = st.session_state["model_page2"]
-    scaler = st.session_state["scaler_page2"]
-    X_baseline = st.session_state["X_baseline_page2"]
-    df_results_page2 = st.session_state["df_results_page2"]
+    delta_s_agg = np.array([agg_income_scale - 1, agg_dti_scale - 1, agg_util_scale - 1])
 
-    st.subheader("Gradual Stress Path Analysis (Varying $\alpha$)")
-
-    alpha_steps = st.slider("Number of $\alpha$ steps (0 to 1)", min_value=5, max_value=50, value=20, step=1)
-    alphas = np.linspace(0, 1, alpha_steps)
-
-    portfolio_mean_pds_alpha = []
-
-    # Calculate delta_s for the alpha application
-    delta_s_components = {
-        "income": scenario_shocks['income_multiplier'] - 1,
-        "unemployment_proxy": scenario_shocks['unemployment_proxy_multiplier'] - 1,
-        "utilization": scenario_shocks['utilization_multiplier'] - 1,
-        "debt_to_income": scenario_shocks['debt_to_income_multiplier'] - 1,
-        "house_price": scenario_shocks['house_price_multiplier'] - 1,
-        "credit_spread": scenario_shocks['credit_spread_additive_bps'] / 10000
-    }
-
-    for alpha in alphas:
-        X_alpha_stressed = X_baseline.copy()
-        for feature, delta in delta_s_components.items():
-            if feature != "credit_spread": # Multiplicative
-                X_alpha_stressed[feature] = X_baseline[feature] * (1 + alpha * delta)
-            else: # Additive for credit spread
-                X_alpha_stressed[feature] = X_baseline[feature] + (alpha * delta)
-
-        # Re-apply clipping to ensure features stay within reasonable bounds after alpha scaling
-        X_alpha_stressed['debt_to_income'] = np.clip(X_alpha_stressed['debt_to_income'], 0.05, 0.6)
-        X_alpha_stressed['utilization'] = np.clip(X_alpha_stressed['utilization'], 0.05, 0.9)
-        X_alpha_stressed['unemployment_proxy'] = np.clip(X_alpha_stressed['unemployment_proxy'], 0.01, 0.15)
-        X_alpha_stressed['credit_spread'] = np.clip(X_alpha_stressed['credit_spread'], 0.005, 0.035)
-        X_alpha_stressed['income'] = np.clip(X_alpha_stressed['income'], 20000, 150000)
-
-        X_alpha_scaled = scaler.transform(X_alpha_stressed)
-        predictions_alpha = model.predict_proba(X_alpha_scaled)[:, 1]
-        portfolio_mean_pds_alpha.append(np.mean(predictions_alpha))
-
-    fig_alpha = go.Figure(
-        data=[go.Scatter(x=alphas, y=portfolio_mean_pds_alpha, mode='lines+markers', name='Mean Portfolio PD')]
-    )
-    fig_alpha.update_layout(
-        title='Mean Portfolio PD Trajectory Under Gradual Stress (Varying $\alpha$)',
-        xaxis_title='Stress Intensity ($\alpha$)',
-        yaxis_title='Mean Probability of Default (PD)'
-    )
-    st.plotly_chart(fig_alpha, use_container_width=True)
-
-    st.markdown("""
-    This plot shows how the mean Probability of Default for the entire portfolio changes as the intensity of the defined stress scenario ($\alpha$) increases from 0 (baseline) to 1 (full stress). Deviations from a linear response can indicate nonlinear model behavior or sensitivity thresholds.
-    """)
-
-    st.subheader("Validation-Ready Outputs")
-
-    st.markdown("""
-    ### Scenario vs. Baseline Metrics Summary
-    A direct comparison of key metrics under baseline and the fully stressed scenario.
-    """)
-
-    summary_metrics = pd.DataFrame({
-        "Metric": ["Mean Probability of Default", "Standard Deviation of PD"],
-        "Baseline": [df_results_page2["Baseline_PD"].mean(), df_results_page2["Baseline_PD"].std()],
-        "Stressed": [df_results_page2["Stressed_PD"].mean(), df_results_page2["Stressed_PD"].std()],
-        "Delta": [df_results_page2["Delta_PD"].mean(), df_results_page2["Delta_PD"].std()]
-    }).set_index("Metric")
-
-    st.dataframe(summary_metrics.style.format("{:.4f}"))
-
-    st.markdown("""
-    ### Distribution of $\Delta PD$ with Threshold Flagging
-    We can identify accounts where the change in PD exceeds a certain threshold, indicating significant impact.
-    """)
-
-    delta_pd_threshold = st.slider("Threshold for $\Delta PD$ flagging", min_value=0.0, max_value=0.1, value=0.03, step=0.005)
-    df_results_page2["Exceeds_Threshold"] = df_results_page2["Delta_PD"] > delta_pd_threshold
-
-    num_exceeding = df_results_page2["Exceeds_Threshold"].sum()
-    percent_exceeding = (num_exceeding / len(df_results_page2)) * 100
-
-    st.info(f"**{num_exceeding}** accounts ({percent_exceeding:.2f}%) have a $\Delta PD$ exceeding the threshold of **{delta_pd_threshold:.3f}**.")
-
-    fig_flagged = go.Figure()
-    fig_flagged.add_trace(go.Histogram(x=df_results_page2['Delta_PD'], nbinsx=50,
-                                     name='All Accounts', opacity=0.7))
-    fig_flagged.add_trace(go.Histogram(x=df_results_page2[df_results_page2['Exceeds_Threshold']]['Delta_PD'],
-                                     nbinsx=50, name=f'$\Delta PD$ > {delta_pd_threshold}',
-                                     marker_color='red', opacity=0.7))
-
-    fig_flagged.update_layout(barmode='overlay', title_text='Distribution of $\Delta PD$ with Flagged Accounts',
-                              xaxis_title_text='Change in PD (Stressed - Baseline)',
-                              yaxis_title_text='Number of Accounts')
-    st.plotly_chart(fig_flagged, use_container_width=True)
-
-    st.markdown("""
-    ### Heatmap by Risk Band (Example: Baseline Risk vs. $\Delta PD$)
-    This heatmap helps visualize the average $\Delta PD$ for different segments, based on their baseline risk characteristics.
-    """)
-
-    # Re-using Risk Bands from Page 2 if available, otherwise defining again
-    def get_risk_band(pd_value):
-        if pd_value < 0.1:
-            return "Low Risk"
-        elif pd_value < 0.3:
-            return "Medium Risk"
-        else:
-            return "High Risk"
+    # Apply stress transformation to original X, then scale
+    X_stressed_values_agg = X.values * (1 + delta_s_agg)
+    X_stressed_agg = pd.DataFrame(X_stressed_values_agg, columns=X.columns)
     
-    if 'Baseline_Risk_Band' not in df_results_page2.columns:
-        df_results_page2['Baseline_Risk_Band'] = df_results_page2['Baseline_PD'].apply(get_risk_band)
+    # Ensure non-negative/within bounds
+    X_stressed_agg['income'] = X_stressed_agg['income'].clip(lower=0)
+    X_stressed_agg['debt_to_income_ratio'] = X_stressed_agg['debt_to_income_ratio'].clip(lower=0, upper=1)
+    X_stressed_agg['utilization_rate'] = X_stressed_agg['utilization_rate'].clip(lower=0, upper=1)
 
-    pivot_table = df_results_page2.pivot_table(values='Delta_PD', index='Baseline_Risk_Band', aggfunc='mean')
+    # Apply scaling with the *trained* scaler
+    X_stressed_scaled_agg = scaler.transform(X_stressed_agg)
 
-    fig_heatmap = go.Figure(data=go.Heatmap(z=pivot_table.values,
-                                           x=pivot_table.columns,
-                                           y=pivot_table.index,
-                                           colorscale='RdYlGn_r')) # Red-Yellow-Green, reversed for higher delta = more red
+    stressed_predictions_agg = model.predict_proba(X_stressed_scaled_agg)[:, 1]
 
-    fig_heatmap.update_layout(title_text='Average $\Delta PD$ by Baseline Risk Band',
-                              xaxis_title_text='Segment (e.g., placeholder)',
-                              yaxis_title_text='Baseline Risk Band',
-                              autosize=False, width=700, height=500)
-    st.plotly_chart(fig_heatmap, use_container_width=True)
+    df_portfolio = pd.DataFrame({
+        'Baseline_PD': baseline_predictions,
+        'Stressed_PD': stressed_predictions_agg,
+        'PD_Change': stressed_predictions_agg - baseline_predictions
+    })
 
-    st.success("Validation-ready outputs generated successfully.")
+    # Define a simple risk grade system for demonstration
+    def get_risk_grade(pd_value):
+        if pd_value < 0.05: return 'Low Risk'
+        elif pd_value < 0.15: return 'Medium Risk'
+        else: return 'High Risk'
 
-"""
+    df_portfolio['Baseline_Risk_Grade'] = df_portfolio['Baseline_PD'].apply(get_risk_grade)
+    df_portfolio['Stressed_Risk_Grade'] = df_portfolio['Stressed_PD'].apply(get_risk_grade)
+
+    st.write(f"Mean Baseline PD (Portfolio): `{df_portfolio['Baseline_PD'].mean():.4f}`")
+    st.write(f"Mean Stressed PD (Portfolio): `{df_portfolio['Stressed_PD'].mean():.4f}`")
+    st.write(f"Mean Change in PD (Portfolio): `{df_portfolio['PD_Change'].mean():.4f}`")
+
+    st.subheader("Risk Grade Migration Under Stress")
+    grade_migration = pd.crosstab(df_portfolio['Baseline_Risk_Grade'], df_portfolio['Stressed_Risk_Grade'], normalize='index').mul(100).round(2)
+    st.dataframe(grade_migration)
+    st.markdown("""
+    The table above shows the percentage of obligors migrating from their baseline risk grade to a stressed risk grade. Values on the diagonal indicate no change, while off-diagonal values show upgrades (top-right) or downgrades (bottom-left).
+    """)
+
+    st.subheader("Sensitivity and Nonlinearity Analysis")
+    st.markdown("""
+    This analysis explores gradual stress paths by varying the shock intensity $\alpha$ for a chosen scenario. The transformed features are calculated as:
+
+    $$ x^{(s,\alpha)} = x \odot (1 + \alpha \cdot \delta_s), \quad \alpha \in [0,1] $$
+
+    By plotting the trajectory of model outputs $\hat{y}^{(s,\alpha)}$ as $\alpha$ increases from 0 to 1, we can reveal nonlinear thresholds and regions where the model's response accelerates or becomes unstable. This helps identify vulnerabilities that might not be apparent from a single stress point.
+    """)
+
+    st.markdown("**Define a specific scenario for sensitivity analysis:**")
+    sens_income_shock = st.number_input("Income Shock (e.g., -0.1 for 10% drop)", value=-0.1, step=0.01, format="%.2f")
+    sens_dti_shock = st.number_input("DTI Shock (e.g., 0.2 for 20% increase)", value=0.2, step=0.01, format="%.2f")
+    sens_util_shock = st.number_input("Utilization Shock (e.g., 0.15 for 15% increase)", value=0.15, step=0.01, format="%.2f")
+
+    # Define the base delta_s for the sensitivity analysis
+    base_delta_s = np.array([sens_income_shock, sens_dti_shock, sens_util_shock])
+
+    alpha_values = np.linspace(0, 1, 20)
+    mean_stressed_pds = []
+
+    for alpha in alpha_values:
+        alpha_delta_s = alpha * base_delta_s
+        X_alpha_stressed_values = X.values * (1 + alpha_delta_s)
+        X_alpha_stressed = pd.DataFrame(X_alpha_stressed_values, columns=X.columns)
+        
+        # Ensure non-negative/within bounds
+        X_alpha_stressed['income'] = X_alpha_stressed['income'].clip(lower=0)
+        X_alpha_stressed['debt_to_income_ratio'] = X_alpha_stressed['debt_to_income_ratio'].clip(lower=0, upper=1)
+        X_alpha_stressed['utilization_rate'] = X_alpha_stressed['utilization_rate'].clip(lower=0, upper=1)
+
+        # Apply scaling
+        X_alpha_stressed_scaled = scaler.transform(X_alpha_stressed)
+        
+        stressed_predictions_alpha = model.predict_proba(X_alpha_stressed_scaled)[:, 1]
+        mean_stressed_pds.append(np.mean(stressed_predictions_alpha))
+
+    fig_sens = go.Figure()
+    fig_sens.add_trace(go.Scatter(x=alpha_values, y=mean_stressed_pds, mode='lines+markers', name='Mean Stressed PD'))
+    fig_sens.update_layout(title='Mean Stressed PD Trajectory with Increasing Stress Intensity ($\alpha$)',
+                           xaxis_title='Stress Intensity ($\alpha$)',
+                           yaxis_title='Mean Probability of Default (PD)',
+                           hovermode='x unified')
+    st.plotly_chart(fig_sens, use_container_width=True)
+
+    st.markdown("""
+    This plot illustrates how the mean Probability of Default (PD) evolves as the intensity of the defined stress scenario increases. Nonlinearities or sharp increases indicate regions where the model is particularly sensitive or unstable under stress.
+    """)
