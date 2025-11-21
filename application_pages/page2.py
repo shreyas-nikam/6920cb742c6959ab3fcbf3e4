@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
+
 def run_page2():
     st.header("2. Scenario Definition Panel & Model Response Measurement")
 
@@ -26,8 +27,9 @@ def run_page2():
     np.random.seed(42)
     n_samples = 1000
     income = np.random.normal(50000, 15000, n_samples)
-    debt_to_income_ratio = np.random.beta(2, 5, n_samples) * 0.5 + 0.1 # Range 0.1 to 0.6
-    utilization_rate = np.random.beta(3, 3, n_samples) * 0.8 # Range 0 to 0.8
+    debt_to_income_ratio = np.random.beta(
+        2, 5, n_samples) * 0.5 + 0.1  # Range 0.1 to 0.6
+    utilization_rate = np.random.beta(3, 3, n_samples) * 0.8  # Range 0 to 0.8
 
     # Simulate a target variable (e.g., default) based on features
     # Higher DTI and utilization, lower income -> higher probability of default
@@ -65,13 +67,17 @@ def run_page2():
     with col1:
         income_scale = st.slider("Income Scale Factor", 0.5, 1.5, 1.0, 0.05)
     with col2:
-        debt_to_income_scale = st.slider("Debt-to-Income Ratio Scale Factor", 0.5, 1.5, 1.0, 0.05)
+        debt_to_income_scale = st.slider(
+            "Debt-to-Income Ratio Scale Factor", 0.5, 1.5, 1.0, 0.05)
     with col3:
-        utilization_scale = st.slider("Utilization Rate Scale Factor", 0.5, 1.5, 1.0, 0.05)
+        utilization_scale = st.slider(
+            "Utilization Rate Scale Factor", 0.5, 1.5, 1.0, 0.05)
 
     # Calculate delta_s based on scales
-    delta_s = np.array([income_scale - 1, debt_to_income_scale - 1, utilization_scale - 1])
-    st.markdown(f"Current scenario shocks ($\delta_s$): `{delta_s[0]:.2f}, {delta_s[1]:.2f}, {delta_s[2]:.2f}`")
+    delta_s = np.array(
+        [income_scale - 1, debt_to_income_scale - 1, utilization_scale - 1])
+    st.markdown(
+        f"Current scenario shocks ($\delta_s$): `{delta_s[0]:.2f}, {delta_s[1]:.2f}, {delta_s[2]:.2f}`")
 
     # --- Model Response Measurement ---
     st.subheader("Model Response Measurement")
@@ -98,11 +104,13 @@ def run_page2():
     # Apply stress transformation to original X, then scale
     X_stressed_values = X.values * (1 + delta_s)
     X_stressed = pd.DataFrame(X_stressed_values, columns=X.columns)
-    
+
     # Ensure no negative values for features that should be non-negative
     X_stressed['income'] = X_stressed['income'].clip(lower=0)
-    X_stressed['debt_to_income_ratio'] = X_stressed['debt_to_income_ratio'].clip(lower=0, upper=1)
-    X_stressed['utilization_rate'] = X_stressed['utilization_rate'].clip(lower=0, upper=1)
+    X_stressed['debt_to_income_ratio'] = X_stressed['debt_to_income_ratio'].clip(
+        lower=0, upper=1)
+    X_stressed['utilization_rate'] = X_stressed['utilization_rate'].clip(
+        lower=0, upper=1)
 
     # Scale the stressed features using the *trained* scaler
     X_stressed_scaled = scaler.transform(X_stressed)
@@ -113,12 +121,14 @@ def run_page2():
 
     st.write(f"Mean Baseline PD: `{np.mean(baseline_predictions):.4f}`")
     st.write(f"Mean Stressed PD: `{np.mean(stressed_predictions):.4f}`")
-    st.write(f"Mean Change in PD ($\Delta \hat{y}^{(s)}$): `{np.mean(delta_predictions):.4f}`")
+    st.write(
+        "Mean Change in PD ($\Delta \hat{y}^{(s)}$):", f"`{np.mean(delta_predictions):.4f}`")
 
     # Plotting the distribution of Delta_y
     st.subheader("Distribution of Change in PD")
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=delta_predictions, nbinsx=50, name='$\Delta \hat{y}^{(s)}$ (Change in PD)'))
+    fig.add_trace(go.Histogram(x=delta_predictions, nbinsx=50,
+                  name='$\Delta \hat{y}^{(s)}$ (Change in PD)'))
     fig.update_layout(title='Distribution of Individual Changes in Probability of Default (PD)',
                       xaxis_title='Change in PD (Stressed PD - Baseline PD)',
                       yaxis_title='Number of Instances',
